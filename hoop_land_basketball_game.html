@@ -1,0 +1,559 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: transparent; }
+#gameWrap { font-family: var(--font-mono, monospace); user-select: none; }
+#canvas { display: block; cursor: default; image-rendering: pixelated; }
+#ui { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #1a1a2e; color: #eee; font-size: 13px; gap: 8px; flex-wrap: wrap; }
+#ui .score { font-size: 20px; font-weight: bold; letter-spacing: 2px; color: #fff; }
+#ui .info { color: #aaa; font-size: 11px; }
+#controls { display: flex; gap: 6px; padding: 8px 12px; background: #111; flex-wrap: wrap; }
+.ctrl-grp { display: flex; gap: 4px; align-items: center; }
+.ctrl-lbl { font-size: 10px; color: #888; margin-right: 2px; }
+kbd { background: #333; color: #eee; border: 1px solid #555; border-radius: 3px; padding: 2px 5px; font-size: 10px; font-family: monospace; }
+#msgOverlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.85); color: #fff; padding: 16px 28px; border-radius: 10px; text-align: center; pointer-events: none; font-family: monospace; z-index: 10; }
+#msgOverlay h2 { font-size: 18px; margin-bottom: 6px; }
+#msgOverlay p { font-size: 12px; color: #aaa; }
+#gameWrap { position: relative; }
+#startBtn { display: block; margin: 0 auto; padding: 10px 24px; background: #e67e22; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin-top: 10px; }
+#startBtn:hover { background: #f39c12; }
+</style>
+
+<div id="gameWrap">
+  <div id="ui">
+    <div>
+      <div class="score" id="scoreBoard">HOME 0 — 0 AWAY</div>
+      <div class="info" id="gameInfo">Q1 • 1:30 • BALL: HOME</div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span id="shotClock" style="font-size:22px;color:#e74c3c;font-weight:bold">24</span>
+      <span style="font-size:10px;color:#888">SHOT CLK</span>
+    </div>
+  </div>
+  <div style="position:relative">
+    <canvas id="canvas" width="680" height="400"></canvas>
+    <div id="msgOverlay">
+      <h2>HOOP LAND</h2>
+      <p>Retro 2D Basketball</p>
+      <p style="margin-top:8px;font-size:11px;color:#ccc">You control the <span style="color:#4fc3f7">BLUE</span> team</p>
+      <button id="startBtn">TIP OFF!</button>
+    </div>
+  </div>
+  <div id="controls" style="background:#111;font-family:monospace">
+    <div class="ctrl-grp"><span class="ctrl-lbl">MOVE:</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div>
+    <div class="ctrl-grp"><span class="ctrl-lbl">PASS:</span><kbd>Space</kbd></div>
+    <div class="ctrl-grp"><span class="ctrl-lbl">SHOOT:</span><kbd>F</kbd></div>
+    <div class="ctrl-grp"><span class="ctrl-lbl">DRIBBLE MOVE:</span><kbd>Shift</kbd></div>
+    <div class="ctrl-grp"><span class="ctrl-lbl">STEAL/DEFEND:</span><kbd>G</kbd></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 680, H = 400;
+
+const COURT = { left: 40, right: 640, top: 50, bottom: 370, midX: 340 };
+const HOOP_R = 10, PLAYER_R = 10;
+const BLUE = '#4fc3f7', RED = '#ef5350', BALL_C = '#ff9800';
+const COURT_C = '#c8a96e', LINE_C = '#a0845a';
+
+let gameStarted = false;
+let keys = {};
+let ball, players, gameState;
+let frameId;
+
+function initGame() {
+  gameState = {
+    homeScore: 0, awayScore: 0,
+    quarter: 1, time: 90, shotClock: 24,
+    possession: 'home',
+    phase: 'play',
+    msg: '', msgTimer: 0,
+    shootTimer: 0, shootTarget: null,
+    ballInAir: false, ballAirProgress: 0,
+    passTarget: null, passTimer: 0
+  };
+
+  ball = { x: COURT.midX, y: (COURT.top + COURT.bottom) / 2, vx: 0, vy: 0, holder: null };
+
+  players = {
+    home: [
+      { x: 180, y: 200, vx: 0, vy: 0, team: 'home', id: 0, role: 'pg', hasBall: true, speed: 2.8 },
+      { x: 220, y: 160, vx: 0, vy: 0, team: 'home', id: 1, role: 'sf', hasBall: false, speed: 2.5 },
+      { x: 220, y: 240, vx: 0, vy: 0, team: 'home', id: 2, role: 'sg', hasBall: false, speed: 2.6 },
+      { x: 140, y: 170, vx: 0, vy: 0, team: 'home', id: 3, role: 'pf', hasBall: false, speed: 2.2 },
+      { x: 100, y: 200, vx: 0, vy: 0, team: 'home', id: 4, role: 'c', hasBall: false, speed: 2.0 },
+    ],
+    away: [
+      { x: 500, y: 200, vx: 0, vy: 0, team: 'away', id: 0, role: 'pg', hasBall: false, speed: 2.7 },
+      { x: 460, y: 160, vx: 0, vy: 0, team: 'away', id: 1, role: 'sf', hasBall: false, speed: 2.4 },
+      { x: 460, y: 240, vx: 0, vy: 0, team: 'away', id: 2, role: 'sg', hasBall: false, speed: 2.5 },
+      { x: 540, y: 170, vx: 0, vy: 0, team: 'away', id: 3, role: 'pf', hasBall: false, speed: 2.1 },
+      { x: 580, y: 200, vx: 0, vy: 0, team: 'away', id: 4, role: 'c', hasBall: false, speed: 1.9 },
+    ]
+  };
+  ball.holder = players.home[0];
+  players.home[0].hasBall = true;
+}
+
+const homeHoop = { x: COURT.left + 18, y: (COURT.top + COURT.bottom) / 2 };
+const awayHoop = { x: COURT.right - 18, y: (COURT.top + COURT.bottom) / 2 };
+
+function getControlledPlayer() {
+  const team = players[gameState.possession === 'home' ? 'home' : 'away'];
+  return team.find(p => p.hasBall) || team[0];
+}
+
+function dist(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
+
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+let lastShootKey = false, lastPassKey = false, lastStealKey = false, lastDribbleKey = false;
+let aiTimers = [0, 0, 0, 0, 0];
+let aiPassDelay = 0;
+let aiShootDelay = 0;
+
+function updatePlayerMovement() {
+  if (!gameState.phase === 'play') return;
+  const controlled = getControlledPlayer();
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup']) dy = -1;
+  if (keys['s'] || keys['arrowdown']) dy = 1;
+  if (keys['a'] || keys['arrowleft']) dx = -1;
+  if (keys['d'] || keys['arrowright']) dx = 1;
+
+  const spd = controlled.speed * (keys['shift'] ? 1.4 : 1.0);
+  if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+  controlled.vx = dx * spd;
+  controlled.vy = dy * spd;
+  controlled.x = clamp(controlled.x + controlled.vx, COURT.left + PLAYER_R, COURT.right - PLAYER_R);
+  controlled.y = clamp(controlled.y + controlled.vy, COURT.top + PLAYER_R, COURT.bottom - PLAYER_R);
+  if (controlled.hasBall && !gameState.ballInAir) {
+    ball.x = controlled.x; ball.y = controlled.y;
+  }
+}
+
+function getTeammates(player) {
+  return players[player.team].filter(p => p !== player);
+}
+
+function getNearestTeammate(player) {
+  const mates = getTeammates(player);
+  return mates.reduce((best, p) => dist(player, p) < dist(player, best) ? p : best, mates[0]);
+}
+
+function getOpenTeammate(player) {
+  const mates = getTeammates(player);
+  const enemies = players[player.team === 'home' ? 'away' : 'home'];
+  return mates.reduce((best, p) => {
+    const nearestEnemy = enemies.reduce((b, e) => dist(p, e) < dist(b, p) ? e : b, enemies[0]);
+    const openness = dist(p, nearestEnemy);
+    const bestNearestEnemy = enemies.reduce((b, e) => dist(best, e) < dist(b, best) ? e : b, enemies[0]);
+    return openness > dist(best, bestNearestEnemy) ? p : best;
+  }, mates[0]);
+}
+
+function attemptShoot(player) {
+  const hoopTarget = player.team === 'home' ? awayHoop : homeHoop;
+  const d = dist(player, hoopTarget);
+  const is3pt = d > 140;
+  let pct = is3pt ? 0.35 : (d < 50 ? 0.78 : 0.58);
+  const nearby = players[player.team === 'home' ? 'away' : 'home'].filter(e => dist(e, player) < 40);
+  pct -= nearby.length * 0.12;
+  pct = Math.max(0.1, Math.min(0.85, pct));
+
+  gameState.ballInAir = true;
+  gameState.ballAirProgress = 0;
+  gameState.shootStart = { x: ball.x, y: ball.y };
+  gameState.shootTarget = { x: hoopTarget.x, y: hoopTarget.y };
+  gameState.shootSuccess = Math.random() < pct;
+  gameState.shootIs3pt = is3pt;
+  gameState.shootingTeam = player.team;
+  gameState.shootingPlayer = player;
+  player.hasBall = false;
+  ball.holder = null;
+}
+
+function doPass(from, to) {
+  gameState.ballInAir = true;
+  gameState.ballAirProgress = 0;
+  gameState.shootStart = { x: ball.x, y: ball.y };
+  gameState.shootTarget = { x: to.x, y: to.y };
+  gameState.shootSuccess = 'pass';
+  gameState.passTarget = to;
+  gameState.passFrom = from;
+  from.hasBall = false;
+  ball.holder = null;
+}
+
+function handleShooting() {
+  const shootPressed = keys['f'];
+  const passPressed = keys[' '];
+  const stealPressed = keys['g'];
+
+  if (gameState.phase !== 'play' || gameState.ballInAir) {
+    lastShootKey = shootPressed;
+    lastPassKey = passPressed;
+    lastStealKey = stealPressed;
+    return;
+  }
+
+  if (gameState.possession === 'home') {
+    const controlled = getControlledPlayer();
+    if (shootPressed && !lastShootKey) { attemptShoot(controlled); }
+    if (passPressed && !lastPassKey) {
+      const target = getOpenTeammate(controlled);
+      if (target) doPass(controlled, target);
+    }
+    if (stealPressed && !lastStealKey) {
+      const enemies = players.away;
+      const nearest = enemies.reduce((b, e) => dist(controlled, e) < dist(controlled, b) ? e : b, enemies[0]);
+      if (dist(controlled, nearest) < 28 && nearest.hasBall) {
+        const chance = 0.35;
+        if (Math.random() < chance) {
+          nearest.hasBall = false;
+          controlled.hasBall = true;
+          ball.holder = controlled;
+          gameState.possession = 'home';
+          showMsg('STEAL!', 60);
+        }
+      }
+    }
+  }
+  lastShootKey = shootPressed;
+  lastPassKey = passPressed;
+  lastStealKey = stealPressed;
+}
+
+function updateAI() {
+  if (gameState.phase !== 'play' || gameState.ballInAir) return;
+  const enemyTeam = 'away';
+  const myTeam = 'home';
+  const awayPlayers = players.away;
+  const homePlayers = players.home;
+
+  if (gameState.possession === 'away') {
+    const ballCarrier = awayPlayers.find(p => p.hasBall) || awayPlayers[0];
+    awayPlayers.forEach((p, i) => {
+      if (p.hasBall) {
+        const hoopTarget = homeHoop;
+        const d = dist(p, hoopTarget);
+        aiShootDelay--;
+        const nearestDef = homePlayers.reduce((b, e) => dist(p, e) < dist(p, b) ? e : b, homePlayers[0]);
+        const underPressure = dist(p, nearestDef) < 35;
+
+        if (d < 50 && aiShootDelay <= 0) {
+          attemptShoot(p);
+          aiShootDelay = 80 + Math.random() * 40;
+        } else if (underPressure && aiPassDelay <= 0) {
+          const target = getOpenTeammate(p);
+          doPass(p, target);
+          aiPassDelay = 40;
+        } else {
+          const ang = Math.atan2(hoopTarget.y - p.y, hoopTarget.x - p.x);
+          const spd = p.speed;
+          p.x += Math.cos(ang) * spd;
+          p.y += Math.sin(ang) * spd;
+          p.x = clamp(p.x, COURT.left + PLAYER_R, COURT.right - PLAYER_R);
+          p.y = clamp(p.y, COURT.top + PLAYER_R, COURT.bottom - PLAYER_R);
+          aiShootDelay--;
+        }
+        aiPassDelay--;
+      } else {
+        const targetX = 400 + (i % 3) * 40 - 40;
+        const targetY = 150 + (i % 2) * 100;
+        const dx = targetX - p.x, dy = targetY - p.y;
+        const d2 = Math.sqrt(dx * dx + dy * dy);
+        if (d2 > 5) { p.x += (dx / d2) * p.speed * 0.7; p.y += (dy / d2) * p.speed * 0.7; }
+        p.x = clamp(p.x, COURT.left + PLAYER_R, COURT.right - PLAYER_R);
+        p.y = clamp(p.y, COURT.top + PLAYER_R, COURT.bottom - PLAYER_R);
+      }
+    });
+    homePlayers.forEach((p, i) => {
+      const target = ballCarrier;
+      const dx = target.x - p.x, dy = target.y - p.y;
+      const d2 = Math.sqrt(dx * dx + dy * dy);
+      const interceptX = target.x + (Math.random() - 0.5) * 20;
+      const interceptY = target.y + (Math.random() - 0.5) * 20;
+      const ddx = interceptX - p.x, ddy = interceptY - p.y;
+      const dd = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (dd > 5) { p.x += (ddx / dd) * p.speed * 0.85; p.y += (ddy / dd) * p.speed * 0.85; }
+      p.x = clamp(p.x, COURT.left + PLAYER_R, COURT.right - PLAYER_R);
+      p.y = clamp(p.y, COURT.top + PLAYER_R, COURT.bottom - PLAYER_R);
+      if (d2 < 25 && target.hasBall && Math.random() < 0.012) {
+        const chance = 0.25;
+        if (Math.random() < chance) {
+          target.hasBall = false;
+          p.hasBall = true;
+          ball.holder = p;
+          gameState.possession = 'home';
+          showMsg('STEAL!', 60);
+        }
+      }
+    });
+  } else {
+    awayPlayers.forEach((p, i) => {
+      const ballCarrier = homePlayers.find(pl => pl.hasBall);
+      if (!ballCarrier) return;
+      const dx = ballCarrier.x - p.x, dy = ballCarrier.y - p.y;
+      const d2 = Math.sqrt(dx * dx + dy * dy);
+      if (d2 > 5) { p.x += (dx / d2) * p.speed * 0.8; p.y += (dy / d2) * p.speed * 0.8; }
+      p.x = clamp(p.x, COURT.left + PLAYER_R, COURT.right - PLAYER_R);
+      p.y = clamp(p.y, COURT.top + PLAYER_R, COURT.bottom - PLAYER_R);
+      if (d2 < 22 && ballCarrier.hasBall && Math.random() < 0.008) {
+        if (Math.random() < 0.22) {
+          ballCarrier.hasBall = false;
+          p.hasBall = true;
+          ball.holder = p;
+          gameState.possession = 'away';
+          showMsg('TURNOVER!', 60);
+          aiShootDelay = 60;
+        }
+      }
+    });
+  }
+}
+
+function updateBallInAir() {
+  if (!gameState.ballInAir) return;
+  gameState.ballAirProgress += 0.035;
+  const t = gameState.ballAirProgress;
+  const sx = gameState.shootStart.x, sy = gameState.shootStart.y;
+  const ex = gameState.shootTarget.x, ey = gameState.shootTarget.y;
+  ball.x = sx + (ex - sx) * t;
+  const arc = -80 * Math.sin(Math.PI * t);
+  ball.y = sy + (ey - sy) * t + arc;
+
+  if (t >= 1) {
+    gameState.ballInAir = false;
+    gameState.ballAirProgress = 0;
+    if (gameState.shootSuccess === 'pass') {
+      const target = gameState.passTarget;
+      target.hasBall = true;
+      ball.holder = target;
+      ball.x = target.x; ball.y = target.y;
+    } else if (gameState.shootSuccess) {
+      const pts = gameState.shootIs3pt ? 3 : 2;
+      if (gameState.shootingTeam === 'home') gameState.homeScore += pts;
+      else gameState.awayScore += pts;
+      showMsg(gameState.shootIs3pt ? '3-POINTER!' : 'BASKET! +' + pts, 80);
+      gameState.shotClock = 24;
+      inboundBall(gameState.shootingTeam === 'home' ? 'away' : 'home');
+    } else {
+      showMsg('MISS!', 50);
+      giveReboundTo(gameState.shootingTeam === 'home' ? 'away' : 'home');
+    }
+  }
+}
+
+function giveReboundTo(team) {
+  const t = players[team];
+  const nearest = t.reduce((b, p) => {
+    const hoop = team === 'home' ? homeHoop : awayHoop;
+    return dist(p, hoop) < dist(b, hoop) ? p : b;
+  }, t[0]);
+  nearest.hasBall = true;
+  ball.holder = nearest;
+  ball.x = nearest.x; ball.y = nearest.y;
+  gameState.possession = team;
+  gameState.shotClock = 24;
+}
+
+function inboundBall(team) {
+  const t = players[team];
+  const p = t[0];
+  p.hasBall = true;
+  ball.holder = p;
+  gameState.possession = team;
+  if (team === 'home') { p.x = 140; p.y = 200; }
+  else { p.x = 540; p.y = 200; }
+  ball.x = p.x; ball.y = p.y;
+  aiShootDelay = 70;
+}
+
+function showMsg(text, duration) {
+  gameState.msg = text;
+  gameState.msgTimer = duration;
+}
+
+let ticker = 0;
+function updateGame() {
+  if (gameState.phase !== 'play') return;
+  ticker++;
+  if (ticker % 60 === 0) {
+    gameState.time--;
+    gameState.shotClock--;
+    if (gameState.shotClock <= 0) {
+      showMsg('SHOT CLOCK!', 70);
+      giveReboundTo(gameState.possession === 'home' ? 'away' : 'home');
+      gameState.shotClock = 24;
+    }
+    if (gameState.time <= 0) {
+      if (gameState.quarter < 4) {
+        gameState.quarter++;
+        gameState.time = 90;
+        gameState.shotClock = 24;
+        showMsg('Q' + gameState.quarter, 80);
+        inboundBall(gameState.quarter % 2 === 0 ? 'away' : 'home');
+      } else {
+        gameState.phase = 'end';
+        showMsg(gameState.homeScore > gameState.awayScore ? 'HOME WINS!' : gameState.awayScore > gameState.homeScore ? 'AWAY WINS!' : 'TIE GAME!', 9999);
+      }
+    }
+  }
+  if (gameState.msgTimer > 0) gameState.msgTimer--;
+}
+
+function drawCourt() {
+  ctx.fillStyle = COURT_C;
+  ctx.fillRect(COURT.left, COURT.top, COURT.right - COURT.left, COURT.bottom - COURT.top);
+  ctx.strokeStyle = LINE_C;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(COURT.left, COURT.top, COURT.right - COURT.left, COURT.bottom - COURT.top);
+
+  ctx.beginPath(); ctx.moveTo(COURT.midX, COURT.top); ctx.lineTo(COURT.midX, COURT.bottom); ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(COURT.midX, (COURT.top + COURT.bottom) / 2, 40, 0, Math.PI * 2); ctx.stroke();
+
+  [homeHoop, awayHoop].forEach((h, i) => {
+    ctx.strokeStyle = LINE_C; ctx.lineWidth = 1;
+    const side = i === 0 ? 1 : -1;
+    ctx.strokeRect(COURT.left + (i === 0 ? 0 : COURT.right - COURT.left - 80), COURT.top + 50, 80, COURT.bottom - COURT.top - 100);
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 40, -Math.PI / 2, Math.PI / 2, i === 0);
+    ctx.stroke();
+    ctx.strokeStyle = '#cc3300'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(h.x, h.y, HOOP_R, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(h.x - side * HOOP_R, h.y); ctx.lineTo(h.x - side * 20, h.y); ctx.stroke();
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(h.x - (i === 0 ? 20 : -10), h.y - 30, 3, 60);
+
+    ctx.strokeStyle = LINE_C; ctx.lineWidth = 1;
+    const threeX = i === 0 ? COURT.left + 140 : COURT.right - 140;
+    ctx.beginPath(); ctx.moveTo(threeX, COURT.top); ctx.lineTo(threeX, COURT.top + 55); ctx.stroke();
+    ctx.beginPath(); ctx.arc(h.x, h.y, 140, -Math.PI * 0.55, Math.PI * 0.55, i !== 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(threeX, COURT.bottom - 55); ctx.lineTo(threeX, COURT.bottom); ctx.stroke();
+  });
+
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, W, COURT.top);
+  ctx.fillRect(0, COURT.bottom, W, H - COURT.bottom);
+  ctx.fillRect(0, 0, COURT.left, H);
+  ctx.fillRect(COURT.right, 0, W - COURT.right, H);
+}
+
+function drawPlayer(p) {
+  const isControlled = gameState.possession === p.team && p.hasBall;
+  const color = p.team === 'home' ? BLUE : RED;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, PLAYER_R, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = isControlled ? '#fff' : 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = isControlled ? 2 : 1;
+  ctx.stroke();
+
+  const roles = { pg: 'PG', sg: 'SG', sf: 'SF', pf: 'PF', c: 'C' };
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(roles[p.role] || '', p.x, p.y);
+
+  if (p.hasBall && !gameState.ballInAir) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, PLAYER_R + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = BALL_C;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+function drawBall() {
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = BALL_C;
+  ctx.fill();
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  if (gameState.ballInAir) {
+    const t = gameState.ballAirProgress;
+    const sz = 6 + Math.sin(Math.PI * t) * 3;
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, sz, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,152,0,0.4)'; ctx.fill();
+  }
+}
+
+function drawHUD() {
+  if (gameState.msgTimer > 0 && gameState.msg) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.beginPath();
+    ctx.roundRect(COURT.midX - 70, (COURT.top + COURT.bottom) / 2 - 20, 140, 40, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(gameState.msg, COURT.midX, (COURT.top + COURT.bottom) / 2);
+  }
+
+  const ctrl = getControlledPlayer();
+  const hoop = ctrl.team === 'home' ? awayHoop : homeHoop;
+  const d = dist(ctrl, hoop);
+  ctx.fillStyle = d > 140 ? '#e74c3c' : '#2ecc71';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(d > 140 ? '3PT' : d < 60 ? 'LAYUP' : '2PT', ctrl.x, ctrl.y - 24);
+}
+
+function updateUI() {
+  document.getElementById('scoreBoard').textContent =
+    `HOME ${gameState.homeScore} — ${gameState.awayScore} AWAY`;
+  const mins = Math.floor(gameState.time / 60);
+  const secs = gameState.time % 60;
+  document.getElementById('gameInfo').textContent =
+    `Q${gameState.quarter} • ${mins}:${secs < 10 ? '0' : ''}${secs} • BALL: ${gameState.possession.toUpperCase()}`;
+  document.getElementById('shotClock').textContent = gameState.shotClock;
+}
+
+function render() {
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, H);
+  drawCourt();
+  [...players.home, ...players.away].forEach(drawPlayer);
+  drawBall();
+  drawHUD();
+  updateUI();
+}
+
+function loop() {
+  if (!gameStarted) { frameId = requestAnimationFrame(loop); return; }
+  updatePlayerMovement();
+  handleShooting();
+  updateAI();
+  updateBallInAir();
+  updateGame();
+  render();
+  frameId = requestAnimationFrame(loop);
+}
+
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('msgOverlay').style.display = 'none';
+  gameStarted = true;
+  aiShootDelay = 70;
+  aiPassDelay = 30;
+});
+
+initGame();
+loop();
+</script>
